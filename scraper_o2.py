@@ -630,12 +630,6 @@ try:
         print(f"🌆 TOWN {town_index+1}/{len(selected_towns)}: {town}")
         print(f"{'='*50}")
         
-        page_number = 1
-        consecutive_empty_pages = 0
-        max_consecutive_empty = 3  # Stop if we hit 3 empty pages in a row
-        pages_since_restart = 0
-        max_pages_per_session = 25  # Restart browser every 25 pages to avoid stability issues
-        
         # Before switching to a new town, clear browser state
         if town_index > 0:  # Only for second town onwards
             try:
@@ -689,52 +683,17 @@ try:
                 wait_for_listings(driver, timeout=15)
         except Exception as e:
             print(f"⚠️ Error during final verification: {str(e)[:100]}...")
-        
+
+        # First, collect all URLs for the town
+        print(f"\n📥 Collecting all listing URLs for {town}...")
+        all_listing_urls = []
+        page_number = 1
+        consecutive_empty_pages = 0
+        max_consecutive_empty = 3
+
         while page_number <= max_pages:
             try:
-                print(f"Scraping page {page_number} in {town}...")
-                pages_since_restart += 1
-                
-                # Restart browser preventatively after a certain number of pages
-                if pages_since_restart >= max_pages_per_session:
-                    print(f"⚙️ Preventative browser restart after {pages_since_restart} pages...")
-                    # Save progress
-                    if agent_data:
-                        df = pd.DataFrame(agent_data)
-                        df.to_csv(filename, index=False)
-                        print(f"💾 Saved data before preventative browser restart")
-                    
-                    # Restart browser
-                    try:
-                        driver.quit()
-                    except:
-                        print("⚠️ Error while closing browser")
-                    
-                    # Create new browser instance
-                    driver = setup_browser()
-                    
-                    # Switch back to current town
-                    if not switch_to_town(driver, town):
-                        print(f"❌ Failed to return to {town} after browser restart. Moving to next town.")
-                        break
-                    
-                    # If we're beyond page 1, click through pages to get back to current page
-                    if page_number > 1:
-                        print(f"Navigating back to page {page_number} after browser restart...")
-                        nav_success = True
-                        for i_click in range(1, page_number):
-                            print(f"Clicking Next to reach page {i_click + 1} of {page_number}...")
-                            if not navigate_to_next_page(driver):
-                                print(f"❌ Failed to navigate back to page {page_number} after restart. Resetting to page 1.")
-                                nav_success = False
-                                break
-                        
-                        if not nav_success:
-                            # Reset to page 1 if navigation failed
-                            page_number = 1
-                    
-                    # Reset pages since restart counter
-                    pages_since_restart = 0
+                print(f"Collecting URLs from page {page_number} in {town}...")
                 
                 # Wait for listings to appear
                 if not wait_for_listings(driver):
@@ -750,211 +709,32 @@ try:
                         break
                     page_number += 1
                     continue
-                
-                # Store current map URL before doing anything else
-                # current_map_url = driver.current_url # This line will be removed.
-                
-                # First get all URLs from the current page
-                print("Collecting listing URLs...")
-                listing_urls = get_listing_urls(driver)
-                print(f"✅ Found {len(listing_urls)} listing URLs on page {page_number}")
 
-                if not listing_urls:
+                # Get URLs from current page
+                page_urls = get_listing_urls(driver)
+                if page_urls:
+                    all_listing_urls.extend(page_urls)
+                    print(f"✅ Found {len(page_urls)} URLs on page {page_number}")
+                    consecutive_empty_pages = 0
+                else:
                     consecutive_empty_pages += 1
                     if consecutive_empty_pages >= max_consecutive_empty:
                         print(f"⚠️ No listings found for {consecutive_empty_pages} consecutive pages in {town}. Moving to next town.")
                         break
-                    print(f"⚠️ No listings found on page {page_number}. Trying next page...")
-                    
-                    # Try to navigate to next page
-                    if not navigate_to_next_page(driver):
-                        print(f"⚠️ Cannot navigate to next page. Moving to next town.")
-                        break
-                    page_number += 1
-                    continue
-                else:
-                    consecutive_empty_pages = 0  # Reset counter if we found listings
-
-                # Now process each URL
-                page_listings_collected = [] # Temporary list for this page's data
-                consecutive_listing_errors = 0  # Reset counter at the start of each page
-                
-                if listing_urls: # Only proceed if there are URLs
-                    for i, url in enumerate(listing_urls, 1):
-                        try:
-                            print(f"→ Page {page_number}, Processing listing {i}/{len(listing_urls)}")
-                            listing_data = scrape_listing(driver, url, town)
-                            
-                            if listing_data:
-                                page_listings_collected.append(listing_data)
-                                print(f"✅ Successfully scraped listing {i}/{len(listing_urls)} in {town} - {listing_data.get('Street Address', 'No address')}")
-                                consecutive_listing_errors = 0  # Reset error counter on success
-                            else:
-                                consecutive_listing_errors += 1
-                                print(f"⚠️ Failed to scrape listing {i}/{len(listing_urls)} - Error counter: {consecutive_listing_errors}/{max_consecutive_errors}")
-                                
-                            # Check if we need to restart the browser due to too many errors
-                            if consecutive_listing_errors >= max_consecutive_errors:
-                                print(f"🔄 Too many consecutive listing failures ({consecutive_listing_errors}). Restarting browser...")
-                                try:
-                                    driver.quit()
-                                except:
-                                    print("⚠️ Error while closing browser")
-                                    
-                                # Save data so far
-                                if page_listings_collected:
-                                    agent_data.extend(page_listings_collected)
-                                    df = pd.DataFrame(agent_data)
-                                    df.to_csv(filename, index=False)
-                                    print(f"💾 Saved data before browser restart")
-                                
-                                # Create new browser instance
-                                driver = setup_browser()
-                                
-                                # Navigate back to the first page of current town
-                                print(f"Navigating to {town} after browser restart...")
-                                driver.get(get_town_url(town))
-                                wait_for_page_ready(driver)
-                                
-                                # Stop processing current page and try to recover from page 1
-                                break
-                                
-                        except Exception as e:
-                            consecutive_listing_errors += 1
-                            print(f"❌ Error processing listing {i}: {str(e)[:100]}...")
-                            print(f"⚠️ Error counter: {consecutive_listing_errors}/{max_consecutive_errors}")
-                            
-                            # Check if we need to restart the browser
-                            if consecutive_listing_errors >= max_consecutive_errors:
-                                print(f"🔄 Too many consecutive errors ({consecutive_listing_errors}). Restarting browser...")
-                                try:
-                                    driver.quit()
-                                except:
-                                    print("⚠️ Error while closing browser")
-                                    
-                                # Save data so far
-                                if page_listings_collected:
-                                    agent_data.extend(page_listings_collected)
-                                    df = pd.DataFrame(agent_data)
-                                    df.to_csv(filename, index=False)
-                                    print(f"💾 Saved data before browser restart")
-                                    
-                                # Create new browser instance
-                                driver = setup_browser()
-                                
-                                # Navigate back to the first page of current town
-                                print(f"Navigating to {town} after browser restart...")
-                                driver.get(get_town_url(town))
-                                wait_for_page_ready(driver)
-                                
-                                # Stop processing current page and try to recover from page 1
-                                break
-                    
-                    # Only add to agent_data if we didn't break the loop due to browser restart
-                    if consecutive_listing_errors < max_consecutive_errors:
-                        agent_data.extend(page_listings_collected) # Add this page's data to the main list
-
-                # If listings were processed, driver is on an individual listing page.
-                # Reliably return to the current map page `page_number` before clicking "Next" for page `page_number + 1`.
-                if listing_urls and consecutive_listing_errors < max_consecutive_errors: # Only if we didn't restart browser during page processing
-                    print(f"Reliably returning to map page {page_number} of {town} before attempting to click Next...")
-                    driver.get(get_town_url(town)) # Go to page 1 of the current town
-                    wait_for_page_ready(driver)
-                    
-                    # Ensure page 1 is stable, especially if we need to click "Next" multiple times
-                    if page_number > 1: # Only critical if current page_number > 1, meaning we need to click Next.
-                        if not wait_for_listings(driver, timeout=15, max_retries=3):
-                            print(f"🚨 CRITICAL: Page 1 of {town} did not load listings during reliable return. Aborting '{town}'.")
-                            if agent_data: # Save any data collected for this town so far
-                                df = pd.DataFrame(agent_data)
-                                df.to_csv(filename, index=False)
-                                print(f"💾 Saved data for {town} to {filename} before aborting.")
-                            
-                            # Try to restart browser before giving up on this town
-                            try:
-                                driver.quit()
-                            except:
-                                print("⚠️ Error while closing browser")
-                                
-                            # Create new browser instance and try to reload page 1
-                            driver = setup_browser()
-                            print(f"Attempting to restart with {town}, page 1...")
-                            driver.get(get_town_url(town))
-                            wait_for_page_ready(driver)
-                            
-                            if not wait_for_listings(driver, timeout=15, max_retries=3):
-                                print(f"🚨 CRITICAL: Still can't load listings for {town} after browser restart. Moving to next town.")
-                                break
-                            else:
-                                # Reset to page 1 since we restarted
-                                page_number = 1
-                                continue
-
-                    nav_success_for_reliable_return = True
-                    if page_number > 1: # Only need to click "Next" if our target (current page_number) is > 1
-                        for i_click in range(1, page_number): # Click "Next" (page_number - 1) times
-                            print(f"Reliable return: Clicking Next to reach map page {i_click + 1} (target is {page_number})...")
-                            try:
-                                if not navigate_to_next_page(driver): # navigate_to_next_page clicks and waits
-                                    print(f"Reliable return: Failed to click Next to page {i_click + 1} while targeting page {page_number}.")
-                                    nav_success_for_reliable_return = False
-                                    break
-                                # Add small delay between clicks
-                                time.sleep(0.5)
-                            except Exception as e:
-                                print(f"Error during navigation: {str(e)[:100]}...")
-                                nav_success_for_reliable_return = False
-                                break
-                    
-                    if not nav_success_for_reliable_return:
-                        print(f"⚠️ Navigation failed during reliable return. Will restart browser and try from page 1.")
-                        if agent_data: # Save any data collected for this town so far
-                            df = pd.DataFrame(agent_data)
-                            df.to_csv(filename, index=False)
-                            print(f"💾 Saved data for {town} to {filename}.")
-                            
-                        # Try to restart browser
-                        try:
-                            driver.quit()
-                        except:
-                            print("⚠️ Error while closing browser")
-                            
-                        # Create new browser instance
-                        driver = setup_browser()
-                        print(f"Attempting to restart with {town}, page 1...")
-                        driver.get(get_town_url(town))
-                        wait_for_page_ready(driver)
-                        
-                        if not wait_for_listings(driver, timeout=15, max_retries=3):
-                            print(f"🚨 CRITICAL: Still can't load listings for {town} after browser restart. Moving to next town.")
-                            break
-                        else:
-                            # Reset to page 1 since we restarted
-                            page_number = 1
-                            continue
-                
-                # Auto-save after each page's processing is complete (or attempted)
-                if agent_data: # This will save all data collected so far, including from previous towns/pages
-                    df = pd.DataFrame(agent_data)
-                    df.to_csv(filename, index=False)
-                    print(f"💾 Auto-saved page {page_number} to {filename}")
 
                 # Navigate to next page with retry logic
                 if not navigate_to_next_page(driver):
                     print(f"⚠️ End of pages for {town}. Moving to next town.")
                     break
-                    
+                
+                # Add delay between page switches
+                time.sleep(2)
+                
                 # Increment page number
                 page_number += 1
                 
             except Exception as e:
-                print(f"❌ Error on page {page_number}: {str(e)[:100]}...")
-                # Try to save progress
-                if agent_data:
-                    df = pd.DataFrame(agent_data)
-                    df.to_csv(filename, index=False)
-                    print(f"💾 Saved partial data to {filename}")
-                
+                print(f"❌ Error collecting URLs on page {page_number}: {str(e)[:100]}...")
                 # Try to move to next page or town
                 try:
                     if not navigate_to_next_page(driver):
@@ -964,6 +744,94 @@ try:
                 except:
                     print(f"⚠️ Cannot recover. Moving to next town.")
                     break
+
+        print(f"\n📊 Collected {len(all_listing_urls)} total URLs for {town}")
+        
+        # Now process all collected URLs
+        if all_listing_urls:
+            print(f"\n🔄 Processing {len(all_listing_urls)} listings for {town}...")
+            consecutive_listing_errors = 0
+
+            for i, url in enumerate(all_listing_urls, 1):
+                try:
+                    print(f"→ Processing listing {i}/{len(all_listing_urls)}")
+                    
+                    listing_data = scrape_listing(driver, url, town)
+                    
+                    if listing_data:
+                        agent_data.append(listing_data)
+                        print(f"✅ Successfully scraped listing {i}/{len(all_listing_urls)} in {town} - {listing_data.get('Street Address', 'No address')}")
+                        consecutive_listing_errors = 0  # Reset error counter on success
+                    else:
+                        consecutive_listing_errors += 1
+                        print(f"⚠️ Failed to scrape listing {i}/{len(all_listing_urls)} - Error counter: {consecutive_listing_errors}/{max_consecutive_errors}")
+                    
+                    # Check if we need to restart the browser due to too many errors
+                    if consecutive_listing_errors >= max_consecutive_errors:
+                        print(f"🔄 Too many consecutive listing failures ({consecutive_listing_errors}). Restarting browser...")
+                        try:
+                            driver.quit()
+                        except:
+                            print("⚠️ Error while closing browser")
+                            
+                        # Save data so far
+                        if agent_data:
+                            df = pd.DataFrame(agent_data)
+                            df.to_csv(filename, index=False)
+                            print(f"💾 Saved data before browser restart")
+                        
+                        # Create new browser instance
+                        driver = setup_browser()
+                        
+                        # Navigate back to the first page of current town
+                        print(f"Navigating to {town} after browser restart...")
+                        driver.get(get_town_url(town))
+                        wait_for_page_ready(driver)
+                        
+                        # Reset error counter
+                        consecutive_listing_errors = 0
+                    
+                    # Auto-save after every 10 listings
+                    if i % 10 == 0 and agent_data:
+                        df = pd.DataFrame(agent_data)
+                        df.to_csv(filename, index=False)
+                        print(f"💾 Auto-saved after {i} listings")
+                    
+                except Exception as e:
+                    consecutive_listing_errors += 1
+                    print(f"❌ Error processing listing {i}: {str(e)[:100]}...")
+                    print(f"⚠️ Error counter: {consecutive_listing_errors}/{max_consecutive_errors}")
+                    
+                    # Check if we need to restart the browser
+                    if consecutive_listing_errors >= max_consecutive_errors:
+                        print(f"🔄 Too many consecutive errors ({consecutive_listing_errors}). Restarting browser...")
+                        try:
+                            driver.quit()
+                        except:
+                            print("⚠️ Error while closing browser")
+                            
+                        # Save data so far
+                        if agent_data:
+                            df = pd.DataFrame(agent_data)
+                            df.to_csv(filename, index=False)
+                            print(f"💾 Saved data before browser restart")
+                            
+                        # Create new browser instance
+                        driver = setup_browser()
+                        
+                        # Navigate back to the first page of current town
+                        print(f"Navigating to {town} after browser restart...")
+                        driver.get(get_town_url(town))
+                        wait_for_page_ready(driver)
+                        
+                        # Reset error counter
+                        consecutive_listing_errors = 0
+
+        # Save data after processing all listings for the town
+        if agent_data:
+            df = pd.DataFrame(agent_data)
+            df.to_csv(filename, index=False)
+            print(f"💾 Saved data for {town} to {filename}")
 
 except KeyboardInterrupt:
     print("🛑 Scraper interrupted by user.")
